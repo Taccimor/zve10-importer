@@ -10,7 +10,7 @@ A small, fast desktop app (Windows) with a thumbnail browser, photo/video previe
 
 ---
 ## Vibe coding warning
-This code has been created totally with AI because I'm not able to code. I asked tothe AI to refactor it and improve readability before releasing the final version, but I'm not able to evalute its work.
+This code has been created totally with AI because I'm not able to code. I asked to the AI to refactor it and improve readability before releasing the final version, but I'm not able to evalute its work.
 
 Even the README has been created by the AI but I checked its coherency because I'm able to understand English, at least.
 
