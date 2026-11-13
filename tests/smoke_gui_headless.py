@@ -26,6 +26,11 @@ def check(cond, msg):
 check.failed = 0
 
 win = main_window.MainWindow()
+
+def pick(*names):
+    """Check exactly the items with these names (like ticking their boxes)."""
+    win.clear_checks(); win.check_where(lambda it: it.name in names)
+
 check(win.model.rowCount() == 4, f"grid shows 4 items (got {win.model.rowCount()})")
 real = [r for r in range(4) if win.item_at(r).name in ("DSC02997", "C1001")]
 check(all(win.model.item(r).icon() is not win.placeholder for r in real), "real thumbnails replaced the placeholder")
@@ -35,11 +40,11 @@ check(not QMessageBox.log, "no error boxes on load")
 # filters + selection
 win.filter_box.idx = [d for _, d in win.filter_box.items].index("video"); win.apply_filter()
 check(sum(win.view.isRowHidden(r) for r in range(4)) == 3, "video filter hides the 3 photos")
-win.select_where(lambda it: True)
+win.check_all()
 check(len(win.selected_items()) == 1, "'select all' selects only visible rows")
-win.filter_box.idx = 0; win.apply_filter(); win.select_where(lambda it: True)
+win.filter_box.idx = 0; win.apply_filter(); win.check_all()
 check(len(win.selected_items()) == 4 and win.b_import.enabled and win.b_delete.enabled, "select all -> buttons enabled")
-win.view.clearSelection(); win._update_buttons()
+win.clear_checks()
 check(not win.b_import.enabled and not win.b_delete.enabled and win.b_offload.enabled, "no selection -> import/delete disabled, offload enabled")
 
 # previews
@@ -58,7 +63,7 @@ def wait_dialog(n_before, timeout=15):
     return QMessageBox.log[n_before:] if len(QMessageBox.log) > n_before else []
 
 # import only (keep on card)
-win.select_where(lambda it: it.name == "DSC02997")
+pick("DSC02997")
 n = len(QMessageBox.log); win.do_import()
 log = wait_dialog(n)
 dest_files = sorted(p.name for p in (tmp / "dest").rglob("*") if p.is_file())
@@ -66,17 +71,17 @@ check(dest_files == ["DSC02997.ARW"], f"import copied only the selected file ({d
 check(win.preview.player.src is None, "preview released its file handles before the session")
 check((card / "DCIM/100MSDCF/DSC02997.ARW").exists(), "keep-on-card left the file on the card")
 check(any("Imported: 1" in m[2] for m in log), "result box reports the import")
-check("✓" in win.model.item([r for r in range(win.model.rowCount()) if win.item_at(r).name == "DSC02997"][0]).text(), "imported item is marked with a check")
+check("imported" in win.model.item([r for r in range(win.model.rowCount()) if win.item_at(r).name == "DSC02997"][0]).text(), "imported item is labelled 'imported'")
 
 # delete selected
-win.select_where(lambda it: it.name == "DSC00001")
+pick("DSC00001")
 n = len(QMessageBox.log); win.do_delete(); log = wait_dialog(n + 1)   # question box + result box
 check(not (card / "DCIM/100MSDCF/DSC00001.ARW").exists(), "delete removed the file")
 check((card / "AVF_INFO").exists(), "partial delete keeps the database (needs Recover Image DB)")
 check(any("Recover Image DB" in m[2] for m in QMessageBox.log[n:]), "user is told to run Recover Image DB")
 
 # offload: keep the real ARW, discard the rest, reset the database
-win.select_where(lambda it: it.name == "DSC02997")
+pick("DSC02997")
 shutil.rmtree(tmp / "dest")
 n = len(QMessageBox.log); win.do_offload(); log = wait_dialog(n)
 check(not (card / "AVF_INFO").exists(), "offload emptied the card and removed AVF_INFO")
@@ -88,9 +93,9 @@ check(any("fresh one" in m[2] for m in QMessageBox.log[n:]), "user told the came
 check(win.model.rowCount() == 0, "grid is empty after the reload")
 
 # offload with nothing selected must refuse
-win.view.clearSelection(); n = len(QMessageBox.log)
+win.clear_checks(); n = len(QMessageBox.log)
 make_card(card, ["DSC00009"], [])
-win.reload(); win.view.clearSelection(); win.do_offload()
+win.reload(); win.clear_checks(); win.do_offload()
 check(QMessageBox.log[-1][0] == "warning" and "Nothing selected" in QMessageBox.log[-1][1], "offload with no selection is refused")
 check((card / "DCIM/100MSDCF/DSC00009.ARW").exists(), "...and nothing was deleted")
 
@@ -187,7 +192,7 @@ ok = [r for r in range(win.model.rowCount())]
 make_card(card, ["DSC00021", "DSC00022"], []); win.reload()
 win.view._cur = 0; pv.stack.i = 1
 win.toggle_fullscreen(); check(win.fs is not None and pv.stack not in pv.lay.widgets, "full screen takes the preview stage")
-win.step_item(1); check(getattr(win.view.selectionModel(), "cur", None) == 1, "step_item moves to the next item")
+win.step_item(1); check(win.view._cur == 1, "step_item moves to the next item")
 win.toggle_fullscreen(); check(win.fs is None and pv.stack in pv.lay.widgets, "leaving full screen puts the stage back")
 pv.stack.i = 0; win.toggle_fullscreen(); check(win.fs is None, "full screen needs something displayed")
 
@@ -201,6 +206,82 @@ check(win.card_box.currentData() in (None, "__choose__") or not Path(win.card_bo
 card2 = make_card(tmp / "card2", [], ["C1001"]); QSettings.store["last_folder"] = str(card2)
 win.fill_card_box(); win.reload(); check(win.b_clean.visible is False, "no leftovers -> Clean button hidden")
 (card2 / "PRIVATE/M4ROOT/CLIP/C1001.MP4").unlink(); win.reload(); check(win.b_clean.visible is True, "leftovers -> Clean button shown")
+# ---------------------------------------------------------------- checkbox selection
+print("--- checkbox selection")
+from PySide6.QtCore import Qt, QRect, QPoint
+card3 = make_card(tmp / "card3", ["DSC00031", "DSC00032", "DSC00033", "DSC00034", "DSC00035"], [])
+QSettings.store["last_folder"] = str(card3); win.fill_card_box(); win.reload()
+names = [win.item_at(r).name for r in range(win.model.rowCount())]
+check(names == ["DSC00031", "DSC00032", "DSC00033", "DSC00034", "DSC00035"], "fixture card loaded in order")
+check(win.selected_items() == [] and all(not win.is_checked(r) for r in range(5)), "nothing is checked at the start")
+checked = lambda: [r for r in range(5) if win.is_checked(r)]
+win.view._cur = 4
+win._grid_clicked(2, "plain"); check(checked() == [], "plain click only previews: no check changes")
+win._grid_clicked(1, "box"); check(checked() == [1], "clicking a checkbox checks that item")
+win._grid_clicked(3, "toggle"); check(checked() == [1, 3], "Ctrl+click adds a second item")
+win._grid_clicked(3, "toggle"); check(checked() == [1], "Ctrl+click on a checked item unchecks it")
+win._grid_clicked(4, "plain"); win._grid_clicked(2, "plain")
+check(checked() == [1], "previewing other items never loses the checks")
+win.view._cur = 0; win._load_preview(); check(checked() == [1], "loading a preview keeps the checks")
+# Shift+click: range from the last clicked item, additive
+win.clear_checks(); win._grid_clicked(0, "plain"); win._grid_clicked(3, "range")
+check(checked() == [0, 1, 2, 3], "Shift+click checks the whole range")
+win._grid_clicked(4, "plain"); win._grid_clicked(1, "range"); check(checked() == [0, 1, 2, 3, 4], "range works backwards and keeps earlier checks")
+win.clear_checks(); win.view.setRowHidden(2, True); win._grid_clicked(0, "plain"); win._grid_clicked(4, "range")
+check(checked() == [0, 1, 3, 4], "Shift+click skips items hidden by the filter")
+win.view.setRowHidden(2, False)
+win.clear_checks(); win._anchor = None; win.view._cur = -1; win._grid_clicked(3, "range")
+check(checked() == [3], "Shift+click with no anchor and nothing previewed checks just that item")
+win.clear_checks(); win._anchor = None; win.view._cur = 1; win._grid_clicked(3, "range")
+check(checked() == [1, 2, 3], "Shift+click as the very first click ranges from the item being previewed")
+win._grid_clicked(4, "range"); check(checked() == [1, 2, 3, 4], "a second Shift+click continues from the last clicked item")
+win._grid_clicked(0, "range"); check(checked() == [0, 1, 2, 3, 4], "...and keeps working in both directions")
+# select all / none / new, hidden items, counts
+win.clear_checks(); win.view.setRowHidden(0, True); win.check_all()
+check(checked() == [1, 2, 3, 4], "Ctrl+A / Select all checks only the items shown")
+win.view.setRowHidden(0, False); win.set_checked(0, True); win.view.setRowHidden(0, True); win._update_buttons()
+check("1 of them hidden" in win.sel_label.t and "5 selected" in win.sel_label.t, "the count mentions checked items hidden by the filter")
+check(len(win.selected_items()) == 5, "actions use ALL checked items, hidden ones included")
+win.view.setRowHidden(0, False); win.clear_checks(); check(checked() == [] and not win.b_import.enabled, "Select none unchecks everything")
+win.history.mark(win.item_at(1)); win.select_new()
+check(checked() == [0, 2, 3, 4], "Select new checks only the items not imported yet")
+check([i.name for i in win.unselected_items()] == ["DSC00032"], "unchecked items are the ones an Offload would delete")
+# the grid widget: how real mouse clicks are classified
+check([widgets.click_mode(*a) for a in ((True, True, True), (True, True, False), (True, False, True), (False, False, True),
+                                         (False, True, False), (True, False, False), (False, False, False))]
+      == ["range", "toggle", "range", "range", "toggle", "box", "plain"],
+      "click_mode: modifiers win over the checkbox area (Shift > Ctrl > box > plain)")
+grid = widgets.ThumbGrid(); got, setcur = [], []
+grid.item_clicked.connect(lambda r, m: got.append((r, m)))
+grid.indexAt = lambda p: _Idx(p.x() // 100) if p.x() < 500 else _Idx(-1)
+grid.visualRect = lambda idx: QRect(idx.row() * 100, 0, 100, 100)
+grid.setCurrentIndex = lambda idx: setcur.append(idx.row())
+class _Idx:
+    def __init__(self, r): self._r = r
+    def row(self): return self._r
+    def isValid(self): return self._r >= 0
+class _Mods:
+    def __init__(self, *f): self.f = set(f)
+    def __and__(self, o): return o in self.f
+class _Ev:
+    def __init__(self, x, y, *mods, button=None):
+        self.p, self.m, self.b, self.accepted = QPoint(x, y), _Mods(*mods), button or Qt.MouseButton.LeftButton, False
+    def position(self):
+        p = self.p; return type("P", (), {"toPoint": lambda s: p})()
+    def button(self): return self.b
+    def modifiers(self): return self.m
+    def accept(self): self.accepted = True
+CTRL, SHIFT = Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.ShiftModifier
+grid.mousePressEvent(_Ev(210, 20)); check(got[-1] == (2, "box") and setcur == [], "click on the checkbox corner: toggle only, the preview is not changed")
+grid.mousePressEvent(_Ev(250, 80)); check(got[-1] == (2, "plain") and setcur == [2], "click on the thumbnail: preview (highlight) only")
+grid.mousePressEvent(_Ev(250, 80, CTRL)); check(got[-1] == (2, "toggle") and setcur[-1] == 2, "Ctrl+click on the thumbnail: toggle + preview")
+grid.mousePressEvent(_Ev(450, 80, SHIFT)); check(got[-1] == (4, "range") and setcur[-1] == 4, "Shift+click on the thumbnail: range + preview")
+before = list(setcur); grid.mousePressEvent(_Ev(410, 20, SHIFT)); check(got[-1] == (4, "range") and setcur == before, "Shift+click ON THE CHECKBOX is a range too (and does not change the preview)")
+grid.mousePressEvent(_Ev(310, 20, CTRL)); check(got[-1] == (3, "toggle") and setcur == before, "Ctrl+click on the checkbox toggles it (no preview change)")
+n = len(got); grid.mousePressEvent(_Ev(250, 80, button=Qt.MouseButton.RightButton)); check(len(got) == n, "right click is left to Qt (no selection change)")
+n = len(got); grid.mouseDoubleClickEvent(_Ev(210, 20)); check(len(got) == n + 1 and got[-1] == (2, "box"), "a fast second click on a checkbox toggles again")
+n = len(got); grid.mousePressEvent(_Ev(900, 50)); check(len(got) == n, "click on empty space does nothing")
+
 # ---- real threads: fast producer (200 fps), slow worker (20 ms/frame): never deadlocks, keeps only the newest
 import threading
 tap2 = pipeline.FrameTap(lambda: (700, 400)); tap2.show_processed = True; tap2.lut = None; tap2.synchronous = False

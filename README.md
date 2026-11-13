@@ -97,6 +97,7 @@ So the leftovers are very probably the cause. I want to be honest about how soli
 
 **Browsing and preview**
 - Thumbnail grid of photos (ARW, JPEG, RAW+JPEG pairs shown as one item) and videos (the camera's own thumbnails). Fast, also over the camera's USB cable.
+- **Selection with checkboxes**: tick the files you want while you browse; previewing another file never loses your selection. `Ctrl+click`, `Shift+click` and `Ctrl+A` work on the checkboxes.
 - Photo preview with exposure data (shutter, aperture, ISO, focal length) and a histogram. ARW files are shown through their embedded JPEG preview: instant, no RAW decoding.
 - Video player inside the window, with a click-to-seek timeline, a **live histogram**, and a **slow-motion** option for 50/60/100/120 fps clips (plays them at 25/30 fps).
 - **Full screen** for photos and videos.
@@ -105,9 +106,9 @@ So the leftovers are very probably the cause. I want to be honest about how soli
 **Managing the card**
 - **Import** selected items to a folder of your choice (by date and type, by date, or flat), with a check that every copy is identical to the original, automatic renaming of name clashes, and an option to remove the files from the card afterwards.
 - **Delete** selected items from the card, with all their sidecar files.
-- **Offload card**: import the items you select, permanently delete all the others, empty the card and reset the camera database in one go.
+- **Offload card**: import the items you check, permanently delete all the unchecked ones, empty the card and reset the camera database in one go.
 - **Clean leftovers**: repairs a card where files were already cut in Explorer (removes orphan thumbnails and stale catalog entries).
-- "Imported" markers and a *Not imported yet* filter, so you can select only new files.
+- An "imported" label and a *Not imported yet* filter, so you can select only new files.
 - Backup of the camera database, catalog and presets before a reset.
 
 **Also included**
@@ -140,19 +141,35 @@ The command line and the tests only need `Pillow`; the window needs `PySide6` to
 ## How to use it
 
 1. **Connect the camera** with the USB cable (USB connection mode: *Mass Storage*), or put the card in a card reader. Start the app. The card appears in the top box (for the camera it is the drive called *USB Drive*, not *PMHOME*). If you connect it after starting the app, press **Refresh**. *Choose a folder…* lets you open a copy of a card stored on your disk.
-2. **Browse.** Click an item to preview it. Use the filter (*All / Photos / Videos / Not imported yet*) and *Select all / none / new*. A ✓ marks items you already imported.
+2. **Browse and select.** Click a thumbnail to preview it, and tick the **checkbox in its top-left corner** to select it (see [Selecting files](#selecting-files) below). Use the filter (*All / Photos / Videos / Not imported yet*) to show only some of the items. Items you already imported are labelled *imported*.
 3. **Choose what to do:**
 
 | Button | What it does |
 |---|---|
 | **Import selected…** | Copies the selected items to your computer and checks that every copy is identical to the original (you can choose *Compare contents* — the safest —, *Compare size only* — faster — or *No check*). Optional checkbox: remove them from the card afterwards. |
 | **Delete selected…** | Permanently deletes the selected items from the card (with confirmation). Nothing is copied. |
-| **Offload card…** | Selected items are **imported**; **every other item is permanently deleted**; then the card is emptied and the camera database reset. Asks for explicit confirmation. |
+| **Offload card…** | The checked items are **imported**; **every unchecked item is permanently deleted**; then the card is emptied and the camera database reset. Asks for explicit confirmation. |
 | **Clean leftovers** | Only shown when the card has leftovers from files cut in Explorer. Removes them. Afterwards run *Recover Image DB* once on the camera. |
 
 4. **Finish.** The app tells you what to do next:
    - *Card is empty and reset* → nothing else to do; the camera builds a fresh database when you turn it on.
    - *Some media remains on the card* → on the camera: **Menu › Setup › Page 4 › Recover Image DB** (once).
+
+### Selecting files
+
+The **selection is made of the ticked checkboxes**, not of the highlighted thumbnail. The highlighted thumbnail is only the one shown in the preview, so you can click through your files and tick the ones you want without ever losing the selection.
+
+| Action | Result |
+|---|---|
+| Click the **checkbox** (top-left corner of a thumbnail) | Ticks / unticks that file. The preview does not change. |
+| Click the **thumbnail** | Shows it in the preview. The ticks are not changed. |
+| `Ctrl` + click (on the picture or on the checkbox) | Ticks / unticks that file. On the picture it also shows the file in the preview. |
+| `Shift` + click (on the picture or on the checkbox) | Ticks every file from the last clicked one up to this one (only the files currently shown). If you have not clicked anything yet, it starts from the file shown in the preview. On the picture it also shows this file in the preview. |
+| `Ctrl+A` or **Select all** | Ticks every file currently shown. |
+| **Select none** | Unticks everything. |
+| **Select new** | Ticks only the files not imported yet. |
+
+The counter at the bottom shows how many files are ticked and how much space they use. If the filter hides some ticked files, the counter tells you; **the buttons act on all ticked files, hidden ones included**.
 
 ### Keyboard shortcuts
 
@@ -163,7 +180,8 @@ The command line and the tests only need `Pillow`; the window needs `PySide6` to
 | `Shift+←` / `Shift+→` | Seek −5 s / +5 s |
 | `L` | LUT on/off |
 | `S` | Slow motion on/off (50/60/100/120 fps clips) |
-| `Ctrl+A` | Select all |
+| `Ctrl+A` | Tick every file shown |
+| `Ctrl+click`, `Shift+click` | Tick one file / a range of files (see above) |
 | In full screen: `←` / `→` | Previous / next item |
 | In full screen: `Esc`, `F`, double-click | Leave full screen |
 
@@ -374,10 +392,10 @@ zvcard/                 the Python package
   history.py            "already imported" memory
   cli.py                command-line front-end
   gui/                  PySide6 front-end
-    main_window.py      the window: grid, selection, actions
+    main_window.py      the window: card, grid, selection (checked items), actions
     preview.py          preview pane (photo/video/LUT/slow motion) + full-screen window
     pipeline.py         FrameTap: video frames -> LUT-graded images and histograms
-    widgets.py          ImageView, HistogramWidget, ClickSlider
+    widgets.py          ThumbGrid (checkbox grid), ImageView, HistogramWidget, ClickSlider
     dialogs.py          LutDialog, ImportDialog
     session.py          SessionRunner: runs a session in a background thread
     common.py           image conversion, formatting, background Task
@@ -452,6 +470,7 @@ The catalog is edited **as text**, with a regex that matches whole `<Material �
   4. the result returns by queued signal; the next frame is picked up immediately.
   
   The target width follows the display area; a 28 ms/frame budget drives an automatic ladder of maximum widths (1920 → 1600 → 1280 → 1024 → 800 → 640): 8 slow frames in a row step down, 60 fast ones step up. A 100 ms timer is only a safety net that makes sure the **last** frame of a paused/seeked video still gets its LUT image and histogram; histograms are throttled to ~8 per second while playing.
+- **Selection.** The selection is the set of items whose `CHECK_ROLE` data is true; the view's own highlight (single selection) only marks the item being previewed. `ThumbGrid` overrides `mousePressEvent` and, instead of letting Qt select, emits `item_clicked(row, mode)` where `click_mode()` classifies the click: `range` (Shift), `toggle` (Ctrl), `box` (the checkbox hit-rectangle, drawn by `ThumbDelegate`) or `plain` (preview only). Modifier keys win over the checkbox area, and a click on the checkbox area never changes the preview. The grid emits the signal *before* moving the highlight, so the window can still read the previously previewed row. `MainWindow._grid_clicked` applies it, keeping an anchor row (the last clicked row; the previewed row if nothing was clicked yet) for Shift ranges that skip rows hidden by the filter. Actions read `selected_items()` (all checked rows, hidden ones included) and Offload uses `unselected_items()` as the delete list.
 - **Timeline.** `ClickSlider` jumps to the click (the click point becomes the *centre* of the handle, using the style's groove/handle rectangles) and scrubs on drag; `setPosition` keeps the play/pause state.
 - **Keys.** Buttons and sliders use `NoFocus` so the keys reach the window; the same actions work in the full-screen window.
 

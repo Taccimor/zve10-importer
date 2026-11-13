@@ -1,16 +1,16 @@
-"""The main window: card selection, thumbnail grid, selection, actions."""
+"""The main window: card selection, thumbnail grid (with checkboxes), actions."""
 from __future__ import annotations
 
 import json
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QItemSelectionModel, QSettings, QSize, QThreadPool, QTimer, Qt, Slot
+from PySide6.QtCore import QSettings, QSize, QThreadPool, QTimer, Qt, Slot
 from PySide6.QtGui import (
     QAction, QColor, QIcon, QKeySequence, QPixmap, QStandardItem, QStandardItemModel,
 )
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QLabel, QListView, QMainWindow,
+    QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QProgressDialog, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
 
@@ -20,6 +20,7 @@ from .common import THUMB, Task, backup_dir, fmt_size, pil_to_qimage
 from .dialogs import ImportDialog, LutDialog
 from .preview import FullscreenWindow, PreviewPane
 from .session import SessionRunner
+from .widgets import CHECK_ROLE, ThumbDelegate, ThumbGrid
 
 
 class MainWindow(QMainWindow):
@@ -50,9 +51,12 @@ class MainWindow(QMainWindow):
             self.filter_box.addItem(text, key)
         self.filter_box.currentIndexChanged.connect(self.apply_filter)
         b_all, b_none, b_new = QPushButton("Select all"), QPushButton("Select none"), QPushButton("Select new")
-        b_all.clicked.connect(lambda: self.select_where(lambda it: True))
-        b_none.clicked.connect(lambda: self.view.clearSelection())
-        b_new.clicked.connect(lambda: self.select_where(lambda it: not self.history.is_imported(it)))
+        b_all.setToolTip("Check every item shown (Ctrl+A)")
+        b_none.setToolTip("Uncheck everything")
+        b_new.setToolTip("Check only the items not imported yet")
+        b_all.clicked.connect(self.check_all)
+        b_none.clicked.connect(self.clear_checks)
+        b_new.clicked.connect(self.select_new)
         top = QHBoxLayout()
         for w in (QLabel("Card:"), self.card_box, refresh, QLabel("   Show:"), self.filter_box, b_all, b_none, b_new):
             top.addWidget(w)
@@ -60,19 +64,21 @@ class MainWindow(QMainWindow):
 
         # --- grid
         self.model = QStandardItemModel()
-        self.view = QListView()
+        self.view = ThumbGrid()
         self.view.setModel(self.model)
-        self.view.setViewMode(QListView.ViewMode.IconMode)
-        self.view.setResizeMode(QListView.ResizeMode.Adjust)
-        self.view.setMovement(QListView.Movement.Static)
-        self.view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.view.setItemDelegate(ThumbDelegate(self.view))
+        self.view.setViewMode(ThumbGrid.ViewMode.IconMode)
+        self.view.setResizeMode(ThumbGrid.ResizeMode.Adjust)
+        self.view.setMovement(ThumbGrid.Movement.Static)
+        self.view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)   # highlight = item being previewed
         self.view.setIconSize(QSize(THUMB, int(THUMB * 0.68)))
         self.view.setGridSize(QSize(THUMB + 20, int(THUMB * 0.68) + 52))
         self.view.setSpacing(4)
         self.view.setUniformItemSizes(True)
         self.view.setWordWrap(True)
-        self.view.selectionModel().selectionChanged.connect(self._selection_changed)
         self.view.selectionModel().currentChanged.connect(self._current_changed)
+        self.view.item_clicked.connect(self._grid_clicked)
+        self._anchor: int | None = None          # last clicked row (start of a Shift+click range)
         self.placeholder = QIcon(self._placeholder_pixmap())
 
         # --- preview
@@ -126,7 +132,7 @@ class MainWindow(QMainWindow):
         self.addAction(space)
         sel_all = QAction(self)
         sel_all.setShortcut(QKeySequence.StandardKey.SelectAll)
-        sel_all.triggered.connect(lambda: self.select_where(lambda it: True))
+        sel_all.triggered.connect(self.check_all)
         self.addAction(sel_all)
         for keys, fn in ((["L"], lambda: self._fullscreen_toggle("lut")),
                          (["S"], lambda: self._fullscreen_toggle("slow")),
@@ -227,13 +233,16 @@ class MainWindow(QMainWindow):
             return
         self.info = info
         self.items = info.items
+        self._anchor = None
         gen = self._generation
         for i, it in enumerate(self.items):
-            mark = ("✓ " if self.history.is_imported(it) else "") + ("▶ " if it.kind == "video" else "")
-            row = QStandardItem(f"{mark}{it.name}\n{it.taken:%Y-%m-%d %H:%M}  {fmt_size(it.size)}")
+            mark = "▶ " if it.kind == "video" else ""
+            done = "  ·  imported" if self.history.is_imported(it) else ""
+            row = QStandardItem(f"{mark}{it.name}\n{it.taken:%Y-%m-%d %H:%M}  {fmt_size(it.size)}{done}")
             row.setEditable(False)
             row.setIcon(self.placeholder)
             row.setData(it, Qt.ItemDataRole.UserRole)
+            row.setData(False, CHECK_ROLE)
             self.model.appendRow(row)
             self.run_task(lambda it=it: media.make_thumbnail(it, THUMB),
                           lambda img, e, i=i, gen=gen: self._thumb_done(gen, i, img))
@@ -259,29 +268,70 @@ class MainWindow(QMainWindow):
             it = self.item_at(r)
             show = (key == "all" or key == it.kind or (key == "new" and not self.history.is_imported(it)))
             self.view.setRowHidden(r, not show)
+        self._update_buttons()
 
-    def select_where(self, pred):
-        sm = self.view.selectionModel()
-        sm.clearSelection()
+    # Selection = the CHECKED items. (The highlighted item is only the one being previewed.)
+    def is_checked(self, row: int) -> bool:
+        return bool(self.model.item(row).data(CHECK_ROLE))
+
+    def set_checked(self, row: int, value: bool):
+        self.model.item(row).setData(bool(value), CHECK_ROLE)
+
+    def visible_rows(self) -> list[int]:
+        return [r for r in range(self.model.rowCount()) if not self.view.isRowHidden(r)]
+
+    def check_where(self, pred):
+        """Check every visible item for which pred(item) is true (never unchecks anything)."""
+        for r in self.visible_rows():
+            if pred(self.item_at(r)):
+                self.set_checked(r, True)
+        self._update_buttons()
+
+    def check_all(self):
+        self.check_where(lambda it: True)
+
+    def clear_checks(self):
         for r in range(self.model.rowCount()):
-            if not self.view.isRowHidden(r) and pred(self.item_at(r)):
-                sm.select(self.model.index(r, 0), QItemSelectionModel.SelectionFlag.Select)
+            self.set_checked(r, False)
+        self._update_buttons()
+
+    def select_new(self):
+        """Only the items not imported yet end up checked."""
+        for r in range(self.model.rowCount()):
+            self.set_checked(r, False)
+        self.check_where(lambda it: not self.history.is_imported(it))
+
+    def _grid_clicked(self, row: int, mode: str):
+        """Mouse click on a thumbnail (modes: see widgets.click_mode). The 'anchor' is the last clicked
+        row: a Shift+click ticks everything between the anchor and the clicked row."""
+        if mode in ("box", "toggle"):
+            self.set_checked(row, not self.is_checked(row))
+        elif mode == "range":
+            start = self._anchor
+            if start is None:                             # nothing clicked yet: start from the previewed item
+                cur = self.view.currentIndex()
+                start = cur.row() if cur.isValid() else row
+            lo, hi = sorted((start, row))
+            for r in self.visible_rows():
+                if lo <= r <= hi:
+                    self.set_checked(r, True)
+        self._anchor = row                                # (a plain click only previews and sets the anchor)
+        self._update_buttons()
 
     def selected_items(self) -> list[scan.Item]:
-        rows = sorted(i.row() for i in self.view.selectionModel().selectedIndexes())
-        return [self.item_at(r) for r in rows]
+        return [self.item_at(r) for r in range(self.model.rowCount()) if self.is_checked(r)]
 
     def unselected_items(self) -> list[scan.Item]:
-        chosen = {i.key for i in self.selected_items()}
-        return [it for it in self.items if it.key not in chosen]
-
-    def _selection_changed(self, *_):
-        self._update_buttons()
+        return [self.item_at(r) for r in range(self.model.rowCount()) if not self.is_checked(r)]
 
     def _update_buttons(self):
         sel = self.selected_items() if self.model.rowCount() else []
         size = sum(i.size for i in sel)
-        self.sel_label.setText(f"{len(sel)} selected ({fmt_size(size)}) of {len(self.items)} items" if self.items else "")
+        hidden = sum(1 for r in range(self.model.rowCount()) if self.is_checked(r) and self.view.isRowHidden(r))
+        text = f"{len(sel)} selected ({fmt_size(size)}) of {len(self.items)} items" if self.items else ""
+        if hidden:
+            text += f"  -  {hidden} of them hidden by the filter"
+        self.sel_label.setText(text)
         has = bool(sel) and not self._busy
         self.b_import.setEnabled(has)
         self.b_delete.setEnabled(has)
@@ -370,7 +420,7 @@ class MainWindow(QMainWindow):
         while 0 <= r < self.model.rowCount():
             if not self.view.isRowHidden(r):
                 idx = self.model.index(r, 0)
-                self.view.selectionModel().setCurrentIndex(idx, QItemSelectionModel.SelectionFlag.NoUpdate)
+                self.view.setCurrentIndex(idx)            # highlight + preview; checks are untouched
                 self.view.scrollTo(idx)
                 return
             r += delta

@@ -3,6 +3,8 @@ It checks my Python code (names, flow, threading hand-offs); it can NOT check re
 import threading
 
 class _Meta(type):
+    def __int__(cls):
+        return 100000 + abs(hash(cls.__name__)) % 100000      # enum-like roles must convert to int
     def __getattr__(cls, name):
         if name.startswith("__"):
             raise AttributeError(name)
@@ -113,6 +115,9 @@ class QListView(D):
     def isRowHidden(self, r): return r in self._hidden
     def clearSelection(self): self._sm.clearSelection()
     def currentIndex(self): return _Idx(self._cur)
+    def setCurrentIndex(self, idx): self._cur = idx.row()
+    def scrollTo(self, idx): pass
+    def mousePressEvent(self, e): self.qt_default_press = True
 
 class QComboBox(D):
     def __init__(self): super().__init__(); self.items = []; self.idx = 0; self.activated = _BoundSignal(); self.currentIndexChanged = _BoundSignal()
@@ -283,3 +288,15 @@ class QSize:
     def scaled(self, other, mode=None):
         r = min(other.width() / max(1, self._w), other.height() / max(1, self._h))
         return QSize(round(self._w * r), round(self._h * r))
+
+class QPoint:
+    def __init__(self, x=0, y=0): self._x, self._y = x, y
+    def x(self): return self._x
+    def y(self): return self._y
+class QRect:
+    def __init__(self, x=0, y=0, w=0, h=0): self._x, self._y, self._w, self._h = x, y, w, h
+    def x(self): return self._x
+    def y(self): return self._y
+    def width(self): return self._w
+    def height(self): return self._h
+    def contains(self, p): return self._x <= p.x() < self._x + self._w and self._y <= p.y() < self._y + self._h
